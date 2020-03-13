@@ -329,8 +329,9 @@ extension ViewController : WKNavigationDelegate {
 	s.src = "https://cdn.jsdelivr.net/npm/axe-core@3.1.2/axe.min.js";
 	s.integrity = "sha256-wIvlzfT77n6fOnSL6/oLbzB873rY7QHTW/e0Z0mOoYs=";
 	s.crossorigin = "anonymous";
-	var t = document.getElementsByTagName(o)[0];
-	t.parentNode.insertBefore(s, t);
+	document.head.appendChild(s);
+	//var t = document.getElementsByTagName(o)[0];
+	//t.parentNode.insertBefore(s, t);
 	""") { (result, error) in
 			}
 		}
