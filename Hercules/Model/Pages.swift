@@ -83,7 +83,32 @@ extension Model {
 		enum Highlight {
 			case vanilla
 			
-			private static let font = NSFont.systemFont(ofSize: 14.0)
+			enum ColorScheme {
+				case dark
+				
+				var backgroundColor: NSColor {
+					NSColor(srgbRed: 0.1, green: 0.1, blue: 0.2, alpha: 1.0)
+				}
+			}
+			
+			enum Font {
+				case medium
+				
+				var font: NSFont {
+					NSFont.systemFont(ofSize: 14.0)
+				}
+			}
+			
+			private static let font = Font.medium.font
+			private static let backgroundColor = ColorScheme.dark.backgroundColor
+			
+			var textColor: NSColor {
+				NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+			}
+			
+			var backgroundColor: NSColor {
+				Highlight.backgroundColor
+			}
 			
 			private static let paragraphStyle: NSParagraphStyle = {
 				let style = NSMutableParagraphStyle()
@@ -96,22 +121,34 @@ extension Model {
 			
 			private static var newline: NSAttributedString = NSAttributedString(string: "\n", attributes: [
 				.font: font,
-				.paragraphStyle: paragraphStyle
+				.paragraphStyle: paragraphStyle,
+				.backgroundColor: backgroundColor,
 			])
 			
 			var newline: NSAttributedString { Highlight.newline }
+			
+			func highlight(textView: NSTextView) {
+				textView.backgroundColor = Highlight.backgroundColor
+				
+				textView.typingAttributes = [
+					.font: Highlight.font,
+					.paragraphStyle: Highlight.paragraphStyle,
+					.foregroundColor: textColor,
+					.backgroundColor: backgroundColor
+				]
+			}
 			
 			func highlight(parsedPage: ParsedPage) -> NSAttributedString {
 				var color: NSColor {
 					switch parsedPage.page {
 					case .web:
-						return NSColor(srgbRed: 0.1, green: 0.5, blue: 0.9, alpha: 1.0)
+						return NSColor(srgbRed: 0.5, green: 0.8, blue: 0.9, alpha: 1.0)
 					case .graphQLQuery:
 						return NSColor(srgbRed: 0.9, green: 0.0, blue: 0.5, alpha: 1.0)
 					case .markdownDocument:
 						return NSColor(srgbRed: 0.2, green: 0.5, blue: 0.3, alpha: 1.0)
 					default:
-						return NSColor.textColor
+						return textColor
 					}
 				}
 				
@@ -119,6 +156,7 @@ extension Model {
 					.font: Highlight.font,
 					.paragraphStyle: Highlight.paragraphStyle,
 					.foregroundColor: color,
+					.backgroundColor: Highlight.backgroundColor,
 				])
 			}
 		}
@@ -180,10 +218,9 @@ extension Model {
 			}
 		}
 		
-		func commit(to mas: NSMutableAttributedString) {
+		func commit(to mas: NSMutableAttributedString, highlight: ParsedPage.Highlight = .vanilla) {
 //			let text = self.text
 			
-			let highlight = ParsedPage.Highlight.vanilla
 			let richText = NSMutableAttributedString()
 			for (index, parsedPage) in self.parsedPages.enumerated() {
 				richText.append(highlight.highlight(parsedPage: parsedPage))

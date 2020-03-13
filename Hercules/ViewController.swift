@@ -101,6 +101,8 @@ class ViewController: NSViewController {
 		
 		NSLayoutConstraint.activate(layoutConstraintsForOrientation)
 	}
+	
+	var highlight: Model.ParsedPage.Highlight = .vanilla
 
 	override func viewDidLoad() {
 		super.viewDidLoad()
@@ -113,10 +115,7 @@ class ViewController: NSViewController {
 		self.updateForOrientation()
 		
 		urlsTextView.delegate = self
-		urlsTextView.typingAttributes = [
-			.font: NSFont.systemFont(ofSize: 14.0),
-			.foregroundColor: NSColor.textColor,
-		]
+		highlight.highlight(textView: urlsTextView)
 	}
 	
 	override func viewDidAppear() {
