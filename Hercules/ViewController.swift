@@ -54,7 +54,7 @@ class ViewController: NSViewController {
 		}
 		set(new) {
 			document.pages = new
-			self.urlsTextView.textStorage!.update(from: new)
+			//self.urlsTextView.textStorage!.update(from: new)
 		}
 	}
 	
@@ -132,6 +132,10 @@ class ViewController: NSViewController {
 	var webScrollView: NSScrollView {
 		return webStackView.enclosingScrollView!
 	}
+	
+	var allWebViews: [WKWebView] {
+		(self.webStackView.arrangedSubviews as NSArray).copy() as! [WKWebView]
+	}
 }
 
 extension ViewController {
@@ -187,8 +191,8 @@ extension ViewController {
 	}
 	
 	@discardableResult func updateWebViews(configuration: WKWebViewConfiguration? = nil) -> UpdateResult {
-		let webViews = (self.webStackView.arrangedSubviews as NSArray).copy() as! [WKWebView]
-		var openWebViewsCount = self.webStackView.arrangedSubviews.count
+		let webViews = self.allWebViews
+		var openWebViewsCount = webViews.count
 		
 		let pages = self.pagesState.presentedPages
 		var result = UpdateResult()
@@ -290,7 +294,12 @@ extension ViewController {
 		} else {
 			NSApp.perform(#selector(NSWindow.performClose(_:)))
 		}
-		
+	}
+	
+	@IBAction func reloadAllPages(_ sender: Any?) {
+		for webView in self.allWebViews {
+			webView.reload(sender)
+		}
 	}
 }
 
@@ -362,17 +371,24 @@ extension ViewController : WKUIDelegate {
 
 extension ViewController : NSTextViewDelegate {
 	func updatePagesFromText(commitSearches: Bool) {
-		var pagesState = self.pagesState
-		
-		pagesState.text = self.urlsTextView.string
-		if commitSearches {
-			pagesState.commitSearches()
-		}
-		
-		self.pagesState = pagesState
-		
-		self.updateWebViews()
-		self.needsUpdate = false
+        var pagesState = self.pagesState
+        
+        pagesState.text = self.urlsTextView.string
+        if commitSearches {
+            pagesState.commitSearches()
+        }
+        
+        // Always keep the model in sync with the editor so selection/indexing works,
+        // but only trigger web view updates (and reformatting) when committing.
+        self.pagesState = pagesState
+        
+        if commitSearches {
+            self.updateWebViews()
+            // Refresh highlighting/formatting only on commit to avoid disrupting typing.
+            self.urlsTextView.textStorage!.update(from: self.pagesState)
+        }
+        
+        self.needsUpdate = false
 	}
 	
 	func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -384,12 +400,12 @@ extension ViewController : NSTextViewDelegate {
 	}
 	
 	func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
-		let before = (textView.string as NSString).substring(with: affectedCharRange)
-		if before.contains("\n") {
-			self.needsUpdate = true
-		}
-		
-		return true
+        let before = (textView.string as NSString).substring(with: affectedCharRange)
+        if before.contains("\n") || (replacementString?.contains("\n") ?? false) {
+            self.needsUpdate = true
+        }
+        
+        return true
 	}
 	
 	func textDidChange(_ notification: Notification) {
@@ -417,3 +433,4 @@ extension ViewController : NSTextViewDelegate {
 		
 	}
 }
+
