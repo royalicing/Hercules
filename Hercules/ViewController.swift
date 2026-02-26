@@ -59,8 +59,17 @@ class ViewController: NSViewController {
 	}
 	
 	var needsUpdate = false
+	private enum TextUpdateReason {
+		case userCommitted
+		case siteNavigated
+		case navigationUpdate
+	}
+	
+	private var textUpdateReason: TextUpdateReason?
 	
 	var layoutConstraintsForOrientation: [NSLayoutConstraint] = []
+	// Maps arrangedSubviews web view index -> page index in pagesState.pages
+	var webViewPageIndices: [Int] = []
 	
 	func updateForOrientation() {
 		let orientation = self.orientation
@@ -109,6 +118,7 @@ class ViewController: NSViewController {
 		
 		webScrollView.backgroundColor = NSColor.black
 		webScrollView.scrollerKnobStyle = .light
+		webScrollView.autohidesScrollers = false
 		
 		webStackView.translatesAutoresizingMaskIntoConstraints = false
 		webStackView.spacing = 20
@@ -148,7 +158,7 @@ extension ViewController {
 		let minWidth: CGFloat = minSize.width
 		
 		let webView = WKWebView(frame: CGRect(origin: .zero, size: minSize), configuration: configuration)
-		webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 13_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.5 Mobile/15E148 Safari/604.1"
+		webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
 		webView.navigationDelegate = self
 		webView.uiDelegate = self
 		webView.allowsBackForwardNavigationGestures = true
@@ -191,72 +201,79 @@ extension ViewController {
 	}
 	
 	@discardableResult func updateWebViews(configuration: WKWebViewConfiguration? = nil) -> UpdateResult {
-		let webViews = self.allWebViews
-		var openWebViewsCount = webViews.count
-		
-		let pages = self.pagesState.presentedPages
-		var result = UpdateResult()
-		
-		for (index, page) in pages.enumerated() {
-			var didAdd = false
-			let webView: WKWebView
-			if index < openWebViewsCount {
-				webView = webViews[index]
-			} else {
-				if let configuration = configuration {
-					webView = self.addWebView(for: page.url, configuration: configuration)
-				} else {
-					webView = self.addWebView(for: page.url)
-				}
-				result.added.append(webView)
-				didAdd = true
-			}
-			
-			switch page {
-			case let .web(url):
-				var didChange = false
-				if
-					let scheme = url.scheme,
-					["https","http"].contains(scheme),
-					webView.url != url
-				{
-					webView.load(URLRequest(url: url))
-					didChange = true
-				}
-				
-				if !didAdd {
-					if didChange {
-						result.changed.append(webView)
-					} else {
-						result.unchanged.append(webView)
-					}
-				}
-			case let .uncommittedSearch(query):
-				let html = HTMLTemplate.query(query: query).makeHTML()
-				webView.loadHTMLString(html, baseURL: nil)
-			case let .graphQLQuery(query):
-				let html = HTMLTemplate.graphQLQuery(query: query).makeHTML()
-				webView.loadHTMLString(html, baseURL: nil)
-			case let .markdownDocument(content):
-				let html = HTMLTemplate.markdown(content: content).makeHTML()
-				webView.loadHTMLString(html, baseURL: nil)
-			case .blank:
-				webView.loadHTMLString("", baseURL: nil)
-			}
-		}
-		
-		openWebViewsCount = self.webStackView.arrangedSubviews.count
-		if pages.count < openWebViewsCount {
-			for indexToRemove in pages.count ..< openWebViewsCount {
-				print("removing", indexToRemove)
-				result.removed.append(webViews[indexToRemove])
-				self.webStackView.removeArrangedSubview(webViews[indexToRemove])
-			}
-		}
-		
-		print("UPDATED WEB VIEWS \(result)")
-		
-		return result
+        let existingWebViews = self.allWebViews
+        var existingCount = existingWebViews.count
+        
+        let pages = self.pagesState.presentedPages
+        // Build list of visible (non-blank) pages with their page indices
+        let visible: [(pageIndex: Int, page: Model.Page)] = pages.enumerated()
+            .filter { $0.element != .blank }
+            .map { (pageIndex: $0.offset, page: $0.element) }
+        var result = UpdateResult()
+        var newMapping: [Int] = []
+        
+        for (webIndex, entry) in visible.enumerated() {
+            let pageIndex = entry.pageIndex
+            let page = entry.page
+            var didAdd = false
+            let webView: WKWebView
+            if webIndex < existingCount {
+                webView = existingWebViews[webIndex]
+            } else {
+                if let configuration = configuration {
+                    webView = self.addWebView(for: page.url, configuration: configuration)
+                } else {
+                    webView = self.addWebView(for: page.url)
+                }
+                result.added.append(webView)
+                didAdd = true
+            }
+            
+            switch page {
+            case let .web(url):
+                var didChange = false
+                if let scheme = url.scheme, ["https","http"].contains(scheme), webView.url != url {
+                    webView.load(URLRequest(url: url))
+                    didChange = true
+                }
+                if !didAdd {
+                    if didChange {
+                        result.changed.append(webView)
+                    } else {
+                        result.unchanged.append(webView)
+                    }
+                }
+            case let .uncommittedSearch(query):
+                let html = HTMLTemplate.query(query: query).makeHTML()
+                webView.loadHTMLString(html, baseURL: nil)
+            case let .graphQLQuery(query):
+                let html = HTMLTemplate.graphQLQuery(query: query).makeHTML()
+                webView.loadHTMLString(html, baseURL: nil)
+            case let .markdownDocument(content):
+                let html = HTMLTemplate.markdown(content: content).makeHTML()
+                webView.loadHTMLString(html, baseURL: nil)
+            case .blank:
+                // Skipped; should not occur due to filtering
+                break
+            }
+            
+            newMapping.append(pageIndex)
+        }
+        
+        // Remove extra web views if we have more than visible pages
+        let visibleCount = visible.count
+        if visibleCount < existingCount {
+            for indexToRemove in visibleCount ..< existingCount {
+                result.removed.append(existingWebViews[indexToRemove])
+                self.webStackView.removeArrangedSubview(existingWebViews[indexToRemove])
+            }
+        }
+        
+        self.webViewPageIndices = newMapping
+        
+        print("UPDATED WEB VIEWS \(result)")
+        
+        return result
 	}
 }
 
@@ -305,15 +322,23 @@ extension ViewController {
 
 extension ViewController : WKNavigationDelegate {
 	private func urlDidChange(for webView: WKWebView) {
-		guard let index = webStackView.arrangedSubviews.firstIndex(of: webView) else { return }
-		guard let url = webView.url else { return }
-		// TODO: use smarter way to change URL line in text view while keeping pending text editing changes
-		switch self.pagesState.pages[index] {
-		case .web:
-			self.pagesState.pages[index] = Model.Page.web(url: url)
-		default:
-			break
-		}
+        guard let webIndex = webStackView.arrangedSubviews.firstIndex(of: webView) else { return }
+        guard webIndex < webViewPageIndices.count else { return }
+        let pageIndex = webViewPageIndices[webIndex]
+        guard let url = webView.url else { return }
+        // Update the model and reflect redirects in the URL text view.
+        switch self.pagesState.pages[pageIndex] {
+        case .web:
+            self.pagesState.pages[pageIndex] = Model.Page.web(url: url)
+            // Refresh the URL field to reflect the redirected URL without triggering delegate loops.
+            let savedSelection = self.urlsTextView.selectedRanges
+            self.textUpdateReason = .navigationUpdate
+            self.urlsTextView.textStorage!.update(from: self.pagesState)
+            self.urlsTextView.selectedRanges = savedSelection
+            self.textUpdateReason = nil
+        default:
+            break
+        }
 	}
 	
 	func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -385,18 +410,43 @@ extension ViewController : NSTextViewDelegate {
         if commitSearches {
             self.updateWebViews()
             // Refresh highlighting/formatting only on commit to avoid disrupting typing.
+            let savedSelection = self.urlsTextView.selectedRanges
+            self.textUpdateReason = .userCommitted
             self.urlsTextView.textStorage!.update(from: self.pagesState)
+            self.urlsTextView.selectedRanges = savedSelection
+            self.textUpdateReason = nil
         }
         
         self.needsUpdate = false
 	}
 	
 	func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-		if commandSelector == #selector(NSTextView.insertNewline(_:)) {
-			self.needsUpdate = true
-		}
-		
-		return false
+        // Commit on Return/Enter
+        if commandSelector == #selector(NSTextView.insertNewline(_:)) {
+            self.needsUpdate = true
+            return false // allow the newline to be inserted
+        }
+        
+        // Focus the selected web view on Tab
+        if commandSelector == #selector(NSTextView.insertTab(_:)) {
+            guard let pageIndex = self.selectedPageIndex else { return true }
+            guard let webIndex = self.webViewPageIndices.firstIndex(of: pageIndex) else { return true }
+            
+            let views = webStackView.arrangedSubviews
+            guard webIndex < views.count else { return true }
+            if let webView = views[webIndex] as? WKWebView {
+                webView.scrollToVisible(webView.bounds)
+                self.view.window?.makeFirstResponder(webView)
+            } else {
+                let view = views[webIndex]
+                view.scrollToVisible(view.bounds)
+                self.view.window?.makeFirstResponder(view)
+            }
+            
+            return true // handled: prevent a tab character from being inserted
+        }
+        
+        return false
 	}
 	
 	func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -409,28 +459,19 @@ extension ViewController : NSTextViewDelegate {
 	}
 	
 	func textDidChange(_ notification: Notification) {
-//		self.urlsTextView.textStorage!.formatAsURLField()
-		
-		self.updatePagesFromText(commitSearches: self.needsUpdate)
+        if textUpdateReason != nil { return }
+        
+        self.updatePagesFromText(commitSearches: self.needsUpdate)
 	}
 	
 	func textViewDidChangeSelection(_ notification: Notification) {
-		guard let index = self.selectedPageIndex else { return }
-		
-		let views = webStackView.arrangedSubviews
-		guard index < views.count else { return }
-		
-		let view = views[index]
-		
-		view.scrollToVisible(view.bounds)
-		
-//		guard let selection = urlsTextView.selectedRanges.first else { return }
-		
-//		let start = selection.rangeValue.location
-//		guard let string = urlsTextView.textStorage?.string else { return }
-//		string.range
-//		string.prefix(upTo: start)
-		
+        guard let pageIndex = self.selectedPageIndex else { return }
+        guard let webIndex = self.webViewPageIndices.firstIndex(of: pageIndex) else { return }
+        
+        let views = webStackView.arrangedSubviews
+        guard webIndex < views.count else { return }
+        let view = views[webIndex]
+        view.scrollToVisible(view.bounds)
 	}
 }
 
