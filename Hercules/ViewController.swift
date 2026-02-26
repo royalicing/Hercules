@@ -63,6 +63,7 @@ class ViewController: NSViewController {
 		case userCommitted
 		case siteNavigated
 		case navigationUpdate
+		case modelChanged
 	}
 	
 	private var textUpdateReason: TextUpdateReason?
@@ -283,9 +284,16 @@ extension ViewController {
 	}
 	
 	@IBAction func addPage(_ sender: Any?) {
-		let url = self.newPageURL
-		self.pagesState.pages.append(Model.Page.web(url: url))
-		self.updateWebViews()
+        let url = self.newPageURL
+        self.pagesState.pages.append(Model.Page.web(url: url))
+        self.updateWebViews()
+        
+        // Update the text view to reflect the new page without triggering delegate loops.
+        let savedSelection = self.urlsTextView.selectedRanges
+        self.textUpdateReason = .modelChanged
+        self.urlsTextView.textStorage!.update(from: self.pagesState)
+        self.urlsTextView.selectedRanges = savedSelection
+        self.textUpdateReason = nil
 	}
 	
 	var selectedPageIndex: Int? {
@@ -301,16 +309,43 @@ extension ViewController {
 	}
 
 	@IBAction func performClosePage(_ sender: Any?) {
-		if self.pagesState.pages.count > 0 {
-			if let indexToRemove = self.selectedPageIndex {
-				self.pagesState.pages.remove(at: indexToRemove)
-			} else {
-				self.pagesState.pages.removeLast()
-			}
-			self.updateWebViews()
-		} else {
-			NSApp.perform(#selector(NSWindow.performClose(_:)))
-		}
+        if !self.pagesState.pages.isEmpty {
+            // Preserve selection so the caret doesn't jump unexpectedly
+            let savedSelection = self.urlsTextView.selectedRanges
+            
+            // Determine which page to remove: selected page, else last non-blank visible page, else last
+            let indexToRemove: Int
+            if let selected = self.selectedPageIndex {
+                indexToRemove = selected
+            } else if let lastVisible = self.pagesState.pages.lastIndex(where: { $0 != .blank }) {
+                indexToRemove = lastVisible
+            } else {
+                indexToRemove = self.pagesState.pages.count - 1
+            }
+            
+            // If that page has a visible web view, remove that specific web view immediately
+            if self.pagesState.pages[indexToRemove] != .blank,
+               let webIndex = self.webViewPageIndices.firstIndex(of: indexToRemove),
+               webIndex < self.webStackView.arrangedSubviews.count {
+                let view = self.webStackView.arrangedSubviews[webIndex]
+                self.webStackView.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
+            
+            // Remove the page from the model
+            self.pagesState.pages.remove(at: indexToRemove)
+            
+            // Update remaining web views to reflect the new state
+            self.updateWebViews()
+            
+            // Update the text view content to reflect the removed page
+            self.textUpdateReason = .modelChanged
+            self.urlsTextView.textStorage!.update(from: self.pagesState)
+            self.urlsTextView.selectedRanges = savedSelection
+            self.textUpdateReason = nil
+        } else {
+            NSApp.perform(#selector(NSWindow.performClose(_:)))
+        }
 	}
 	
 	@IBAction func reloadAllPages(_ sender: Any?) {
