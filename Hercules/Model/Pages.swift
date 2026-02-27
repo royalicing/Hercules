@@ -12,6 +12,7 @@ extension Model {
 	enum Page : Equatable {
 		case blank
 		case web(url: URL)
+        case head(url: URL)
 		case uncommittedSearch(query: String)
 		case graphQLQuery(query: String)
 		case markdownDocument(content: String)
@@ -20,6 +21,8 @@ extension Model {
 			switch self {
 			case let .web(url):
 				return url
+            case let .head(url):
+                return url
 			default:
 				return nil
 			}
@@ -29,6 +32,7 @@ extension Model {
 			switch self {
 			case .blank: return ""
 			case .web(let url): return url.absoluteString
+            case .head(let url): return "HEAD \(url.absoluteString)"
 			case .uncommittedSearch(let query): return query
 			case .graphQLQuery(let query): return query
 			case .markdownDocument(let content): return content
@@ -57,6 +61,15 @@ extension Model {
 				if trimmedInput == "" {
 					return ParsedPage(page: .blank, input: input)
 				}
+
+                // HEAD request syntax: "HEAD <url>" (allow any whitespace after HEAD)
+                let components = trimmedInput.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
+                if components.count == 2, components[0].uppercased() == "HEAD" {
+                    let urlString = String(components[1]).trimmingCharacters(in: .whitespaces)
+                    if let url = URL(string: urlString), url.scheme != nil {
+                        return ParsedPage(page: .head(url: url), input: input)
+                    }
+                }
 				
 				if
 					let url = URL(string: String(trimmedInput)),
@@ -143,6 +156,8 @@ extension Model {
 					switch parsedPage.page {
 					case .web:
 						return NSColor(srgbRed: 0.5, green: 0.8, blue: 0.9, alpha: 1.0)
+                    case .head:
+                        return NSColor(srgbRed: 0.3, green: 0.7, blue: 0.7, alpha: 1.0)
 					case .graphQLQuery:
 						return NSColor(srgbRed: 0.9, green: 0.0, blue: 0.5, alpha: 1.0)
 					case .markdownDocument:
@@ -202,6 +217,8 @@ extension Model {
 					switch page {
 					case let .web(url):
 						return url.absoluteString
+					case let .head(url):
+						return "HEAD \(url.absoluteString)"
 					case let .uncommittedSearch(query):
 						return query
 					case let .graphQLQuery(query):
@@ -237,3 +254,4 @@ extension Model {
 		}
 	}
 }
+

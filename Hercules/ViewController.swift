@@ -155,6 +155,13 @@ extension ViewController {
 		return webViewConfig
 	}
 	
+	private final class HeadMetricsCollector: NSObject, URLSessionTaskDelegate {
+		var metrics: URLSessionTaskMetrics?
+		func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+			self.metrics = metrics
+		}
+	}
+	
 	func addWebView(for: URL?, configuration: WKWebViewConfiguration = makeConfiguration()) -> WKWebView {
 		let minWidth: CGFloat = minSize.width
 		
@@ -244,6 +251,77 @@ extension ViewController {
                         result.unchanged.append(webView)
                     }
                 }
+            case let .head(url):
+                // Perform a HEAD request with timing metrics and render headers
+                var request = URLRequest(url: url)
+                request.httpMethod = "HEAD"
+                let collector = HeadMetricsCollector()
+                let session = URLSession(configuration: .default, delegate: collector, delegateQueue: nil)
+                let task = session.dataTask(with: request) { data, response, error in
+                    // Extract metrics
+                    let metrics = collector.metrics
+                    let txn = metrics?.transactionMetrics.last
+                    func ms(_ start: Date?, _ end: Date?) -> String {
+                        guard let s = start, let e = end else { return "n/a" }
+                        let interval = e.timeIntervalSince(s) * 1000.0
+                        return String(format: "%.1f", interval)
+                    }
+                    let dns = ms(txn?.domainLookupStartDate, txn?.domainLookupEndDate)
+                    let tcp = ms(txn?.connectStartDate, txn?.connectEndDate)
+                    let tls = ms(txn?.secureConnectionStartDate, txn?.secureConnectionEndDate)
+                    let server = ms(txn?.requestEndDate, txn?.responseStartDate)
+                    
+                    DispatchQueue.main.async {
+                        defer { session.finishTasksAndInvalidate() }
+                        if let http = response as? HTTPURLResponse {
+                            let headers = http.allHeaderFields.map { "\($0): \($1)" }.sorted().joined(separator: "\n")
+                            let content = """
+                            HEAD \(url.absoluteString)
+                            
+                            Status: \(http.statusCode)
+                            
+                            Timing (ms):
+                            DNS Lookup: \(dns)
+                            TCP Connection: \(tcp)
+                            TLS Handshake: \(tls)
+                            Server Processing: \(server)
+                            
+                            \(headers)
+                            """
+                            let html = HTMLTemplate.headResult(content: content).makeHTML()
+                            webView.loadHTMLString(html, baseURL: nil)
+                        } else if let error = error {
+                            let content = """
+                            HEAD \(url.absoluteString)
+                            
+                            Error: \(error.localizedDescription)
+                            
+                            Timing (ms):
+                            DNS Lookup: \(dns)
+                            TCP Connection: \(tcp)
+                            TLS Handshake: \(tls)
+                            Server Processing: \(server)
+                            """
+                            let html = HTMLTemplate.headResult(content: content).makeHTML()
+                            webView.loadHTMLString(html, baseURL: nil)
+                        } else {
+                            let content = """
+                            HEAD \(url.absoluteString)
+                            
+                            No response
+                            
+                            Timing (ms):
+                            DNS Lookup: \(dns)
+                            TCP Connection: \(tcp)
+                            TLS Handshake: \(tls)
+                            Server Processing: \(server)
+                            """
+                            let html = HTMLTemplate.headResult(content: content).makeHTML()
+                            webView.loadHTMLString(html, baseURL: nil)
+                        }
+                    }
+                }
+                task.resume()
             case let .uncommittedSearch(query):
                 let html = HTMLTemplate.query(query: query).makeHTML()
                 webView.loadHTMLString(html, baseURL: nil)
@@ -454,7 +532,7 @@ extension ViewController : WKUIDelegate {
 }
 
 extension ViewController : NSTextViewDelegate {
-	func updatePagesFromText(commitSearches: Bool) {
+    func updatePagesFromText(commitSearches: Bool) {
         var pagesState = self.pagesState
         
         pagesState.text = self.urlsTextView.string
@@ -477,14 +555,33 @@ extension ViewController : NSTextViewDelegate {
         }
         
         self.needsUpdate = false
-	}
-	
+    }
+
+    private func isInsertionAtEndOfLine(_ textView: NSTextView) -> Bool {
+        let nsString = textView.string as NSString
+        let sel = textView.selectedRange()
+        // Only consider a single insertion point as eligible
+        guard sel.length == 0 else { return false }
+        var contentsEnd = 0
+        nsString.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: sel)
+        return sel.location == contentsEnd
+    }
+    
 	func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        // Commit on Return/Enter without inserting a newline
+        // Shift-Return inserts a newline anywhere
+        if commandSelector == #selector(NSTextView.insertLineBreak(_:)) {
+            return false // allow newline insertion
+        }
+        
+        // Plain Return: if caret is at end-of-line, insert newline; otherwise commit
         if commandSelector == #selector(NSTextView.insertNewline(_:)) {
-            self.needsUpdate = true
-            self.updatePagesFromText(commitSearches: true)
-            return true // handled: prevent newline insertion
+            if isInsertionAtEndOfLine(textView) {
+                return false // allow newline insertion at end-of-line
+            } else {
+                self.needsUpdate = true
+                self.updatePagesFromText(commitSearches: true)
+                return true // handled: prevent newline insertion (commit instead)
+            }
         }
         
         // Focus the selected web view on Tab
