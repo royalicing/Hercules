@@ -406,11 +406,35 @@ extension ViewController : WKNavigationDelegate {
 		}
 	}
 	
-//	func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-//		if navigationAction.navigationType == WKNavigationType.linkActivated {
-//			decisionHandler(.allow)
-//		}
-//	}
+	func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        // Command-click: open link as a new Page entry in the text field (not a new window)
+        if navigationAction.navigationType == .linkActivated,
+           navigationAction.modifierFlags.contains(.command),
+           let url = navigationAction.request.url {
+            // Insert after the page corresponding to this web view if possible
+            if let webIndex = webStackView.arrangedSubviews.firstIndex(of: webView),
+               webIndex < webViewPageIndices.count {
+                let pageIndex = webViewPageIndices[webIndex]
+                let insertIndex = min(pageIndex + 1, self.pagesState.pages.count)
+                self.pagesState.pages.insert(.web(url: url), at: insertIndex)
+            } else {
+                self.pagesState.pages.append(.web(url: url))
+            }
+            
+            // Update UI: web views and text field
+            self.updateWebViews()
+            let savedSelection = self.urlsTextView.selectedRanges
+            self.textUpdateReason = .modelChanged
+            self.urlsTextView.textStorage!.update(from: self.pagesState)
+            self.urlsTextView.selectedRanges = savedSelection
+            self.textUpdateReason = nil
+            
+            decisionHandler(.cancel)
+            return
+        }
+        
+        decisionHandler(.allow)
+    }
 }
 
 extension ViewController : WKUIDelegate {
