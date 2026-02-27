@@ -567,7 +567,52 @@ extension ViewController : NSTextViewDelegate {
         return sel.location == contentsEnd
     }
     
+    private func lineStartLocation(of lineIndex: Int, in nsText: NSString) -> Int {
+        var pos = 0
+        var lineStart = 0
+        var lineEnd = 0
+        var contentsEnd = 0
+        for _ in 0...lineIndex {
+            nsText.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd, for: NSRange(location: pos, length: 0))
+            pos = lineEnd
+        }
+        return lineStart
+    }
+    
+    @discardableResult
+    private func moveSelectedLine(delta: Int) -> Bool {
+        guard let currentIndex = self.selectedPageIndex else { return false }
+        let targetIndex = currentIndex + delta
+        guard targetIndex >= 0 && targetIndex < self.pagesState.parsedPages.count else { return false }
+        
+        var pagesState = self.pagesState
+        pagesState.parsedPages.swapAt(currentIndex, targetIndex)
+        self.pagesState = pagesState
+        
+        // Update UI
+        self.updateWebViews()
+        self.textUpdateReason = .modelChanged
+        self.urlsTextView.textStorage!.update(from: self.pagesState)
+        
+        // Place caret at start of moved line
+        let nsText = self.urlsTextView.string as NSString
+        let newLoc = self.lineStartLocation(of: targetIndex, in: nsText)
+        self.urlsTextView.setSelectedRange(NSRange(location: newLoc, length: 0))
+        self.textUpdateReason = nil
+        
+        return true
+    }
+    
 	func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        // Option-Up/Down: move current line up/down (VS Code behavior)
+        if let event = NSApp.currentEvent, event.modifierFlags.contains(.option) {
+            if commandSelector == #selector(NSResponder.moveToBeginningOfParagraph(_:)) || commandSelector == #selector(NSResponder.moveUp(_:)) {
+                if moveSelectedLine(delta: -1) { return true }
+            } else if commandSelector == #selector(NSResponder.moveToEndOfParagraph(_:)) || commandSelector == #selector(NSResponder.moveDown(_:)) {
+                if moveSelectedLine(delta: 1) { return true }
+            }
+        }
+        
         // Shift-Return inserts a newline anywhere
         if commandSelector == #selector(NSTextView.insertLineBreak(_:)) {
             return false // allow newline insertion
