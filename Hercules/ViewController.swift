@@ -480,10 +480,11 @@ extension ViewController : NSTextViewDelegate {
 	}
 	
 	func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        // Commit on Return/Enter
+        // Commit on Return/Enter without inserting a newline
         if commandSelector == #selector(NSTextView.insertNewline(_:)) {
             self.needsUpdate = true
-            return false // allow the newline to be inserted
+            self.updatePagesFromText(commitSearches: true)
+            return true // handled: prevent newline insertion
         }
         
         // Focus the selected web view on Tab
